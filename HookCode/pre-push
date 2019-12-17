@@ -1,0 +1,105 @@
+#!/bin/bash
+head_tag=$(git tag -l --points-at HEAD | grep "metrics")
+#This shell instance must be capable of communicating with the db and the metrics tag must be present
+if [ "$head_tag" = "metrics" -a "$(command -v mysql)" != "" ]
+	then
+		echo "Running metrics on this committed code." > .git/pre-push.log
+		author_name=$(git log -1 --pretty=format:'%an')
+		author_email=$(git log -1 --pretty=format:'%ae')
+		commit_hash=$(git log -1 --pretty=format:'%H')
+		#date is in  format DAY, date month yyyy hh:mm:ss UTC
+		commit_date=$(git show -s --format=%ci | cut -d' ' --complement -f3)
+		repo_url=$(cut -d "@" -f 2 <<< $(git config --get remote.origin.url))
+		echo $author_name,$author_email,$commit_date,$commit_hash,$repo_url >> .git/pre-push.log
+		#Start building db update command
+		#Call Author and Commit Info db stored procedure
+		command="CALL InsertCommitInfo('$commit_date',NULL,InsertAuthor('$author_email', '$author_name'), '$commit_hash');"
+		commaTags=$(tr -s '\r\n' ',' <<< $(git tag -l --points-at HEAD) | sed -e 's/,$/\n/')
+		tagsCount=$(awk -F"," '{print NF}' <<< "${commaTags}")
+		command="$command\
+				CALL InsertCommitTags('$commit_hash', '$commaTags', '$repo_url', '$tagsCount');"
+		#UCC needs itself to run
+		if [ "$(command -v UCC)" != "" ]
+			then
+				#Run UCC Metrics
+				.git/hooks/pre-push-commands/gen_ucc_xml.sh >> .git/pre-push.log
+				#Upload XML to db command
+				command="$command\
+						LOAD XML LOCAL INFILE './Metrics/UCC.xml'\
+						INTO TABLE Ucc_metrics (@wholeCom, @embCom, @phySLOC, @logSLOC, @path)\
+						SET commit_ID=(SELECT c.commit_ID FROM Commit_info c WHERE c.commit_hash = '$commit_hash'),\
+						file_ID=InsertFile(@path, '$repo_url'),\
+						physical_sloc=@phySLOC,\
+						logical_sloc=@logSLOC,\
+						comments=@wholeCom,\
+						embedded_comments=@embCom,\
+						metrics_maintainability3=NULL,\
+						metrics_maintainability4=NULL;\
+						LOAD XML LOCAL INFILE './Metrics/UCC_main.xml'\
+						INTO TABLE Temp_maintainability (@main3, @main4, @path)\
+						SET m_main3=@main3,\
+						m_main4=@main4,\
+						f_path=@path,\
+						c_hash='$commit_hash',
+						repo_url='$repo_url';\
+						CALL UpdateMaintainability();"
+		else
+			echo "Could not run UCC on this project" >> .git/pre-push.log
+		fi
+		
+		#CPPCheck needs itself and CMake to run
+		if [ -f "./CMakeLists.txt" -a "$(command -v cmake)" != "" -a "$(command -v cppcheck)" != "" ]
+			then
+				#Run CppCheck
+				cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON >> .git/pre-push.log
+				cppcheck --xml --project=compile_commands.json --output-file=./Metrics/cppCheck.xml >> .git/pre-push.log
+				#Upload XML to db command
+				absolute_suffix=$(pwd)
+				command="$command\
+						LOAD XML LOCAL INFILE './Metrics/cppCheck.xml'\
+						INTO TABLE Cpp_metrics
+						ROWS IDENTIFIED BY '<error>' (@id, @severity, @msg, @file, @line)\
+						SET commit_ID=(SELECT c.commit_ID FROM Commit_info c WHERE c.commit_hash = '$commit_hash'),\
+						file_ID=InsertFileMatch(@file, '$absolute_suffix', '$repo_url'),\
+						severity=@severity,\
+						msg=@msg,\
+						warning_ID=@id,\
+						line_num=@line;"
+		else
+			echo "Could not run CppCheck on this project" >> .git/pre-push.log
+		fi
+		
+		#LCOV needs files to be compiled with flags
+		#Developer should have run this:
+		#g++ -ftest-coverage -fprofile-arcs SOURCES
+		#Also needs to have been run at least once
+		if [ -n "$(find . -type f -name '*.gcda')" ]
+			then
+				#Generate LCOV files
+				lcov -c --directory . --output-file ./Metrics/main_coverage.info >> .git/pre-push.log
+				genhtml ./Metrics/main_coverage.info --output-directory ./Metrics/lcov_metrics >> .git/pre-push.log
+          
+				#grep out the code coverage percent
+				percent=$(grep 'headerCovTableEntryHi' ./Metrics/lcov_metrics/index.html | head -1 | grep -o -P '\d+\.\d+')
+        
+				#Upload XML to db command
+				command="$command\
+						CALL UpdateGCOV('$commit_hash', '$percent');"
+		else
+			echo "Could not run LCOV on this project" >> .git/pre-push.log
+		fi
+   
+   
+		#Remove all files that are not XMLs
+		#Some cleanup
+		rm ./Metrics/*.txt
+		rm ./Metrics/*.csv
+		
+		#Run the commands on the db
+		echo "$command" >> .git/pre-push.log
+		
+		mysql --login-path=metrics --local-infile=1 --execute="$command" -D Program_info >> .git/pre-push.log
+    rm -r ./Metrics/*
+	else
+		echo "Not running metrics on this pushed code." > .git/pre-push.log
+fi

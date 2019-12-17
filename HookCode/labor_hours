@@ -1,0 +1,63 @@
+#!/bin/bash
+
+if [ -z "$1" ]; then
+	read -p 'Email: ' emailvar
+
+	count="$(mysql --login-path=metrics -s -N --execute="
+			SELECT COUNT(*) FROM Author a WHERE a.author_email = '$emailvar'" -D Program_info)"
+
+	done=0
+	while [ "$done" -eq 0 ]
+	do
+        	if [ $count -ne 0 ]; then
+        		done=1
+		else
+			read -p 'Invalid email. Please re-enter email. ' emailvar
+			count="$(mysql --login-path=metrics -s -N --execute="
+			SELECT COUNT(*) FROM Author a WHERE a.author_email = '$emailvar'" -D Program_info)"
+		fi
+	done
+else
+	emailvar="$1"
+fi
+
+echo "Pulling commits for $emailvar"
+
+command="CALL FindNullHours('$emailvar');"
+
+mysql --login-path=metrics --execute="$command" -D Program_info
+
+read -p 'Which commit would you like to enter hours for? Please enter commit_ID: ' commit_ID
+
+ID="$(mysql --login-path=metrics -s -N --execute="
+			SELECT c.commit_ID FROM Commit_info c JOIN Author a USING(author_ID) 
+			WHERE a.author_email = '$emailvar' AND c.labor_hours IS NULL" -D Program_info)"
+
+done=0
+while [ "$done" -eq 0 ]
+do
+	if [ -n "$(echo $ID | grep -w $commit_ID)" ]; then
+		done=1;
+	else
+		read -p 'Invalid commit_ID. Please enter a valid commit_ID: ' commit_ID
+	fi
+done
+
+done=0
+read -p 'Enter your labor hours: ' hours
+
+regex='^[0-9]+([.][0-9]+)?$'
+while [ "$done" -eq 0 ]
+do
+	if [[ $hours =~ $regex ]]; then
+                done=1;
+        else
+                read -p 'Invalid Input. Please eneter a number: ' hours
+        fi
+done
+
+#after performing inout checks, insert hours.
+command="Call InsertHours('$commit_ID','$hours')"
+mysql --login-path=metrics --execute="$command" -D Program_info
+
+exit 0;

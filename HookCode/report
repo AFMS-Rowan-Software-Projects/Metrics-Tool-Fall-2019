@@ -1,0 +1,63 @@
+#!/bin/bash
+#This program will generate a report based on the parameters passed to it.
+
+current_date=`date +'%m-%d-%Y'`
+
+done=0
+while [ "$done" -eq 0 ]
+do
+
+read -p $'Which type of report would you like? Choose a number from the menu below.
+1.) All metrics for 1 commit
+2.) Metrics for all commits within a certain date range
+3.) All commits.\n' input
+
+	case $input in
+		1)
+			echo 'You have chosen to create a report based on a commit hash.'
+			read -p $'Please enter a commit_hash: \n' c_hash
+			if [[ "$c_hash" =~ ^[a-z0-9]{40}$ ]]; then
+				filename="single_$current_date.csv"
+				mysql --login-path=metrics -s -N --execute="CALL ReportCommit('$c_hash')" -D Program_info | sed 's/\t/,/g' > $filename
+				echo "Report generated in file name '$filename'.csv"
+				done=1
+			else
+				echo $c_hash
+				echo 'Invalid commit_hash.'
+			fi
+			;;
+		2) 	
+			echo 'You have chosen to create a report based on a date range.'
+			read -p $'Please enter a start date in the format YYYY-MM-DD\n' start
+			if [[ "$start" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+				read -p $'Please enter an end date in the format YYYY-MM-DD\n' end
+				if [[ "$end" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then  
+					filename="range_$current_date.csv"
+					mysql --login-path=metrics -s -N --execute="CALL ReportDate('$start', '$end')" -D Program_info | sed 's/\t/,/g' > $filename
+					echo "Report generated in file name '$filename'"
+					done=1
+				fi
+			else	
+				echo 'Invalid Date.'
+			fi
+			;;
+		 3)
+			echo $"You have chosen to create a report with all prior commits.\n"
+			filename="all_$current_date.csv"
+			mysql --login-path=metrics -s -N --execute="CALL Report()" -D Program_info | sed 's/\t/,/g' > $filename
+			echo "Report generated in file name '$filename'"
+			done=1
+			;;
+			
+	esac
+
+#End While
+done
+
+exit 0;
+
+
+
+mysql --login-path=metrics -s -N --execute=" SELECT COUNT(*) FROM Author a WHERE a.author_email = '$emailvar'" -D Program_info
+
+#read -p 'Invalid email. Please re-enter email. ' emailvar
