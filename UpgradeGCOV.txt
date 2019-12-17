@@ -1,0 +1,6 @@
+This document is a description of how to expand the functionality of gcov metrics. Currently, gcov only covers the entire project.
+To get per-file coverage, you need to get gcovr. gcovr produces an XML output file, which can be loaded into the database using the LOAD XML command, similar to cppcheck. 
+The database would need a new table, similar to the cpp check table. The LOAD XML command can be called int he hook or from Jenkins. 
+The new table would have the columns gcov_metrics_ID, file_ID, commit_ID. Then, there would be columns for any of the metrics that you would like to store. 
+file_ID and commit_ID would be foreign keys from the File table and the Commit_info table respectively.
+Additionally, you should remove the "percent_coverage" field from the Commit_info table because this data will now be redundant. 
